@@ -1,0 +1,4 @@
+interface:
+  display_name: "证据保真的学术写作审查"
+  short_description: "审查中文论文章节边界与主张证据，保留必要限制并按批准方案最小改写"
+  default_prompt: "使用 $coherent-academic-writing 对我的论文执行 full-audit，先给审查报告与最小修改提案。"
