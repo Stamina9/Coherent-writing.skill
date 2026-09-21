@@ -1,0 +1,2 @@
+-r skills/coherent-academic-writing/requirements.txt
+PyYAML>=6,<7
