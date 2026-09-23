@@ -1,5 +1,7 @@
 # Validation record — 2026-09-21
 
+Historical 2.0.0 record. The 2.0.1 incremental audit is in [AUDIT-2026-09-23.md](AUDIT-2026-09-23.md).
+
 ## Local executable checks
 
 Environment: Windows, bundled CPython 3.12, python-docx 1.2.0, PyYAML 6.0.3.

@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 import zipfile
+import zlib
 
 
 MAX_BYTES = 128 * 1024 * 1024
@@ -64,11 +65,13 @@ def read_package(path):
                 raise ExtractionError("INVALID_DOCX", "Duplicate ZIP entries; export a clean DOCX copy.")
             if any(e.flag_bits & 1 for e in entries):
                 raise ExtractionError("ENCRYPTED_DOCX", "Encrypted ZIP entries; supply an unencrypted copy.")
+            if any(e.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED} for e in entries):
+                raise ExtractionError("INVALID_DOCX", "Unsupported ZIP compression; export a standard DOCX copy.")
             if "[Content_Types].xml" not in names or "word/document.xml" not in names:
                 raise ExtractionError("INVALID_DOCX", "ZIP is not a supported Word DOCX package.")
             if package.testzip() is not None:
                 raise ExtractionError("INVALID_DOCX", "DOCX checksum failed; export a clean copy.")
-    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, OSError) as exc:
+    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, OSError, EOFError, zlib.error) as exc:
         raise ExtractionError("INVALID_DOCX", "Unreadable/corrupt DOCX ZIP; export a clean copy.") from exc
     return raw, names
 
@@ -117,6 +120,7 @@ def extract_docx(source):
                 "CONTENT_CONTROL_NOT_EXTRACTED": {"sdt", "customXml", "altChunk"},
                 "FIELD_NOT_EVALUATED": {"fldSimple", "fldChar", "instrText"},
                 "NUMBERING_NOT_RENDERED": {"numPr"},
+                "INLINE_CONTENT_NOT_EXTRACTED": {"sym", "noBreakHyphen", "softHyphen", "AlternateContent", "smartTag"},
             }
             found = {node.tag.rsplit("}", 1)[-1] for node in element.iter()}
             for code, tags in groups.items():
@@ -149,6 +153,9 @@ def extract_docx(source):
                     location = f"{prefix}T{t_index}"
                     t_index += 1
                     blocks.append({"id": location, "kind": "table", "rows": len(item.rows)})
+                    # Row/cell properties and wrapped rows are not visited by the
+                    # paragraph iterator (e.g. a tracked deletion in w:trPr).
+                    inspect_xml(item._tbl, location)
                     seen_cells = set()
                     for r, row in enumerate(item.rows):
                         for c, cell in enumerate(row.cells):
@@ -217,6 +224,11 @@ def write_result(result, output_dir=None):
 
 
 def main(argv=None):
+    # The CLI protocol is UTF-8, including paths printed through redirected pipes
+    # on Windows. Library callers keep control over their own streams.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="Readable unencrypted DOCX")
     parser.add_argument("--output-dir", type=Path, help="Private work directory; defaults to system temporary directory")

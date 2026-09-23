@@ -7,7 +7,7 @@ description: >-
 license: MIT
 metadata:
   author: "Stamina9 (original skill attribution: MS-MDA project)"
-  version: "2.0.0"
+  version: "2.0.1"
   compatibility: "Codex / Claude Code / Agent Skills clients; DOCX extraction requires Python 3.10+ and python-docx 1.2.x; local files only, no network required."
 ---
 
