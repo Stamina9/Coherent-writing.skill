@@ -13,10 +13,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -r requirements-dev.txt
+      - name: Fetch pinned official skill-creator validator
+        uses: actions/checkout@v4
+        with:
+          repository: openai/skills
+          ref: 49f948faa9258a0c61caceaf225e179651397431
+          path: .ci/skill-tools
+          sparse-checkout: skills/.system/skill-creator
+          persist-credentials: false
+      - run: python -m pip install -r requirements-dev.txt -c requirements-ci.txt
+      - run: python -X utf8 .ci/skill-tools/skills/.system/skill-creator/scripts/quick_validate.py skills/coherent-academic-writing
       - run: python -X utf8 -m unittest discover -s tests -v
       - run: python -m compileall -q skills tests
-      - run: git show --check --oneline HEAD
+      - run: git diff --check HEAD^ HEAD

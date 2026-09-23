@@ -5,7 +5,8 @@
 
 `python scripts/extract_docx.py "论文.docx" --output-dir "private-work"`
 
-成功退出 0，stdout 为唯一 UTF-8 JSON 文件绝对路径。输出默认在系统临时目录，
+成功退出 0，stdout 为唯一 UTF-8 JSON 文件绝对路径；CLI 的 stdout/stderr 均固定为 UTF-8，
+调用方应按 UTF-8 解码，即使 Windows 控制台或重定向管道使用其他代码页。输出默认在系统临时目录，
 可明确指定私有工作目录；创建新随机文件，不覆盖任何已有文件，失败清理本次不完整输出。
 结果包含论文全文，应使用有适当访问权限的目录；使用后删除本次产生的临时 JSON，保留用户需要的报告。
 POSIX 临时文件使用限制性权限；Windows 继承目录 ACL，不承诺额外加密。
@@ -24,6 +25,9 @@ Heading 支持 outline level、继承样式及 Heading/标题样式名；不自�
 
 - 图片、文本框、公式、内容控件、嵌入对象、修订、域遇到时给定位警告；不解析图片含义，
   不决定接受/拒绝修订，不把域缓存当作已重新计算。
+- 表格行/单元格级修订也会发出警告；同一对象可在表和内部段落各有定位警告。
+  字体符号、特殊连字符、smartTag 或 AlternateContent 等未抽取的行内内容触发
+  INLINE_CONTENT_NOT_EXTRACTED；不能把缺失的符号当成原文（例如忽略效应值前的负号）。
 - 页眉页脚、脚注尾注和批注存在的包部件会列在 excluded_parts 中；不读取其文本。
 - 不提供页码、浮动图实际位置、视觉阅读顺序或引用真实性；不展开样式继承的所有自动编号。
 - coverage.status 为 text-only 或 partial，永远不是“全文全部对象已读”。即使没有警告，
@@ -40,4 +44,18 @@ Heading 支持 outline level、继承样式及 Heading/标题样式名；不自�
 | 5 | INPUT_IO / OUTPUT_IO | 检查路径和权限 |
 
 资源上限为压缩输入 128 MiB、声明的解压总量 256 MiB、10000 ZIP entries；超过则停止，
-不解包到磁盘、不执行宏、不请求外部关系。损坏 XML 返回清楚错误且不输出原稿内容到错误消息。
+仅支持标准 DOCX 的 stored/deflate ZIP 条目。不解包到磁盘、不执行宏、不请求外部关系。
+损坏压缩流或 XML 返回清楚错误且不输出原稿内容到错误消息。
+
+## JSON 1.0 稳定字段
+
+| 字段 | 类型及约束 |
+| --- | --- |
+| schema_version | 字符串 `1.0` |
+| source / source_sha256 | 来源绝对路径字符串 / 64 位小写十六进制摘要 |
+| blocks | 顺序数组；id 唯一。paragraph 包含 text:string、style:string 或 null、heading_level:1–9 整数或 null、caption_candidate:boolean；table 包含 rows:非负整数 |
+| warnings | 数组，每项包含 code、location、detail 三个字符串 |
+| coverage | scope:string、status:`text-only` 或 `partial`、paragraph_count/table_count:非负整数、excluded_parts/limitations:字符串数组 |
+
+相同来源字节在同一抽取器版本中定位稳定。修复遗漏检测可新增 warning code，无需变更 1.0；
+消费者必须容忍新增警告码和附加字段。删除字段、更改字段类型或改变 ID 含义须提升 schema 主版本。

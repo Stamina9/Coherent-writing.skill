@@ -120,7 +120,7 @@ PDF OCR 或格式修复。图像、公式、文本框、修订、域、页眉页
 ## 开发与验证
 
 ```sh
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt -c requirements-ci.txt
 python -m unittest discover -s tests -v
 python -m compileall -q skills tests
 git diff --check
@@ -128,8 +128,11 @@ git diff --check
 python /path/to/skill-creator/scripts/quick_validate.py skills/coherent-academic-writing
 ```
 
-CI 在 Windows/Linux、Python 3.10/3.12 上运行包结构检查和抽取测试，不依赖机器私有的 quick_validate
-路径，也不调用付费模型。生成的 DOCX fixtures 仅留在测试临时目录。
+CI 在 Windows/Linux、Python 3.10/3.12 上运行包结构检查和抽取测试，使用 requirements-ci.txt
+固定直接及传递依赖。另检出 openai/skills 固定提交
+`49f948faa9258a0c61caceaf225e179651397431`，运行其官方 quick_validate.py，
+无需机器私有路径，也不调用付费模型。上游校验器仅作为 CI 工具检出，保留上游许可，
+不打入技能包。生成的 DOCX fixtures 仅留在测试临时目录。
 [行为评测](evals/README.md)另行检查删改的语义不变量；自动化单元测试通过不代表模型行为必然正确。
 
 ```text

@@ -3,9 +3,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -35,7 +37,47 @@ class ExtractionTests(unittest.TestCase):
 
     def save(self, doc):
         doc.save(self.source)
-        return extractor.extract_docx(self.source)
+        result = extractor.extract_docx(self.source)
+        self.assert_contract(result)
+        return result
+
+    def assert_contract(self, result):
+        """Validate the public JSON 1.0 contract, not the extractor's internals."""
+        self.assertEqual(result["schema_version"], "1.0")
+        self.assertIsInstance(result["source"], str)
+        self.assertTrue(Path(result["source"]).is_absolute())
+        self.assertRegex(result["source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIsInstance(result["blocks"], list)
+        self.assertIsInstance(result["warnings"], list)
+        ids = set()
+        paragraphs = tables = 0
+        for block in result["blocks"]:
+            self.assertIsInstance(block["id"], str)
+            self.assertNotIn(block["id"], ids)
+            ids.add(block["id"])
+            if block["kind"] == "paragraph":
+                paragraphs += 1
+                self.assertIsInstance(block["text"], str)
+                self.assertTrue(block["style"] is None or isinstance(block["style"], str))
+                level = block["heading_level"]
+                self.assertTrue(level is None or type(level) is int and 1 <= level <= 9)
+                self.assertIs(type(block["caption_candidate"]), bool)
+            else:
+                self.assertEqual(block["kind"], "table")
+                tables += 1
+                self.assertIs(type(block["rows"]), int)
+                self.assertGreaterEqual(block["rows"], 0)
+        for warning in result["warnings"]:
+            for key in ("code", "location", "detail"):
+                self.assertIsInstance(warning[key], str)
+        coverage = result["coverage"]
+        self.assertIsInstance(coverage["scope"], str)
+        self.assertIn(coverage["status"], ("partial", "text-only"))
+        self.assertEqual(coverage["paragraph_count"], paragraphs)
+        self.assertEqual(coverage["table_count"], tables)
+        for key in ("excluded_parts", "limitations"):
+            self.assertIsInstance(coverage[key], list)
+            self.assertTrue(all(isinstance(v, str) for v in coverage[key]))
 
     def codes(self, result):
         return {w["code"] for w in result["warnings"]}
@@ -183,6 +225,7 @@ class ExtractionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             paths.append(Path(result.stdout.strip()))
         self.assertNotEqual(*paths)
+        self.assert_contract(json.loads(paths[0].read_text(encoding="utf-8")))
         self.assertEqual(json.loads(paths[0].read_text(encoding="utf-8")), json.loads(paths[1].read_text(encoding="utf-8")))
         before = set(self.directory.iterdir())
         with patch.object(extractor.json, "dump", side_effect=OSError("disk full")):
@@ -199,6 +242,70 @@ class ExtractionTests(unittest.TestCase):
             extractor.write_result({}, self.source)
         self.assertEqual(caught.exception.code, "OUTPUT_IO")
         self.assertEqual(self.source.read_bytes(), b"occupied")
+
+    def test_corrupt_deflate_returns_diagnostic_without_output(self):
+        doc = Document()
+        doc.add_paragraph("text")
+        doc.save(self.source)
+        raw = bytearray(self.source.read_bytes())
+        with zipfile.ZipFile(io.BytesIO(raw)) as package:
+            offset = package.getinfo("word/document.xml").header_offset
+        name_len, extra_len = struct.unpack_from("<HH", raw, offset + 26)
+        # BTYPE=3 is an invalid DEFLATE block, while the ZIP directory remains valid.
+        raw[offset + 30 + name_len + extra_len] = 7
+        self.source.write_bytes(raw)
+        output = self.directory / "output"
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.source), "--output-dir", str(output)], capture_output=True)
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertIn(b"INVALID_DOCX", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertFalse(output.exists())
+        self.assertEqual(self.source.read_bytes(), raw)
+
+    def test_nonstandard_zip_compression_is_rejected_cleanly(self):
+        with zipfile.ZipFile(self.source, "w", compression=zipfile.ZIP_BZIP2) as package:
+            package.writestr("[Content_Types].xml", "<Types/>")
+            package.writestr("word/document.xml", "<document/>")
+        with self.assertRaises(extractor.ExtractionError) as caught:
+            extractor.extract_docx(self.source)
+        self.assertEqual(caught.exception.code, "INVALID_DOCX")
+
+    def test_deleted_table_row_requires_revision_review(self):
+        doc = Document()
+        doc.add_heading("Results", 1)
+        table = doc.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = "No improvement"
+        table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:del"))
+        result = self.save(doc)
+        self.assertIn("REVISIONS_NOT_RESOLVED", self.codes(result))
+        self.assertEqual(result["coverage"]["status"], "partial")
+        self.assertTrue(any(b.get("text") == "No improvement" for b in result["blocks"]))
+
+    def test_unextracted_inline_symbol_warns_instead_of_silent_text(self):
+        doc = Document()
+        doc.add_heading("Results", 1)
+        run = doc.add_paragraph("Effect: ").add_run()
+        symbol = OxmlElement("w:sym")
+        symbol.set(qn("w:font"), "Symbol")
+        symbol.set(qn("w:char"), "F02D")
+        run._r.append(symbol)
+        run.add_text("2")
+        result = self.save(doc)
+        self.assertIn("INLINE_CONTENT_NOT_EXTRACTED", self.codes(result))
+        self.assertEqual(result["coverage"]["status"], "partial")
+
+    def test_cli_path_is_utf8_even_with_legacy_stdout_encoding(self):
+        doc = Document()
+        doc.add_paragraph("text")
+        doc.save(self.source)
+        output = self.directory / "中文输出"
+        env = dict(os.environ, PYTHONIOENCODING="ascii")
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.source), "--output-dir", str(output)], capture_output=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = Path(result.stdout.decode("utf-8").strip())
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.parent, output.resolve())
 
 
 if __name__ == "__main__":

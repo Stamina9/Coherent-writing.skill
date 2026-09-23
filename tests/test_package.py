@@ -1,8 +1,14 @@
 from pathlib import Path
+import json
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import yaml
+from docx import Document
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +48,22 @@ class PackageTests(unittest.TestCase):
         interface = data["interface"]
         self.assertTrue(25 <= len(interface["short_description"]) <= 64)
         self.assertIn("$" + SKILL.name, interface["default_prompt"])
+
+    def test_installed_folder_runs_outside_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            installed = root / "skills" / SKILL.name
+            shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+            source = root / "paper.docx"
+            doc = Document()
+            doc.add_paragraph("必要限制必须保留。")
+            doc.save(source)
+            # Same invocation as SKILL.md, now from the installed directory.
+            result = subprocess.run([sys.executable, "scripts/extract_docx.py", str(source), "--output-dir", str(root / "output")], cwd=installed, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(Path(result.stdout.decode("utf-8").strip()).read_text(encoding="utf-8"))
+            self.assertEqual(report["blocks"][0]["text"], "必要限制必须保留。")
+            self.assertEqual((installed / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())
 
 
 if __name__ == "__main__":
